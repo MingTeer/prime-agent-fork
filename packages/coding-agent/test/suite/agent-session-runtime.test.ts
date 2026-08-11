@@ -519,6 +519,19 @@ describe("AgentSessionRuntime characterization", () => {
 		]);
 	});
 
+	it("skips due auto-refine when tearing down for user-initiated session replacement", async () => {
+		const { runtime } = await createRuntimeForTest(() => {});
+
+		await runtime.session.prompt("hello");
+		const originalSession = runtime.session;
+		const disposeSpy = vi.spyOn(originalSession, "disposeAsync");
+
+		const newSessionResult = await runtime.newSession();
+		expect(newSessionResult.cancelled).toBe(false);
+
+		expect(disposeSpy).toHaveBeenCalledWith({ runDueRefineOnDispose: false });
+	});
+
 	it("honors session_before_switch cancellation for new and resume", async () => {
 		const events: RecordedSessionEvent[] = [];
 		let cancelReason: "new" | "resume" | undefined;

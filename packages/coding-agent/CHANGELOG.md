@@ -6,6 +6,8 @@
 - Changed sent agent messages in the IPython cell UI to show only the message text with a `╰─` gutter when expanded, matching received messages, and hid the raw `agent_message.send` receipt dictionary.
 - Fixed Homebrew installs attempting to self-update their versioned Cellar keg instead of directing users to `brew upgrade prime-agent` ([#844](https://github.com/PrimeIntellect-ai/prime-agent/issues/844))
 - Fixed `openai-codex` models being invisible to `find_models` and rlm subagents because model discovery sent the prime-agent version as the codex `client_version`, and treated an empty catalog as a successful result ([#702](https://github.com/PrimeIntellect-ai/prime-agent/issues/702)).
+- Added `ctrl+f` in the agents view to toggle saved sessions between the current project and all projects, persisted across restarts.
+- Fixed `/new`, `/resume`, and fork surfacing a false 30s client timeout while the server was still draining in-flight refinement during session disposal ([#1190](https://github.com/PrimeIntellect-ai/prime-agent/issues/1190)).
 
 ## [0.7.1] - 2026-08-07
 
