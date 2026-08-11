@@ -14,6 +14,10 @@ try {
 		format: "esm",
 		logLevel: "silent",
 		outfile: outputPath,
+		// @anthropic-ai/sdk dynamically imports node builtins in its
+		// file-credentials paths. Those never run in the browser (the provider
+		// always passes an explicit apiKey), so leave them out of the bundle.
+		external: ["node:fs", "node:path"],
 	});
 	process.exit(0);
 } catch (error) {

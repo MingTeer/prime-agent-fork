@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Updated `@anthropic-ai/sdk` to ^0.115.0 and excluded its file-credential node builtins from the browser smoke bundle.
+
 ## [0.7.1] - 2026-08-07
 
 ## [0.7.0] - 2026-08-05
