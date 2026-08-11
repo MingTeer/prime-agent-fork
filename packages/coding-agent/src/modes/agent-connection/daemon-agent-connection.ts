@@ -98,6 +98,13 @@ interface DaemonSnapshotAssembly {
 export const DAEMON_REFINE_REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
 const DAEMON_LONG_RUNNING_REQUEST_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 export const DAEMON_RECONNECT_TIMEOUT_MS = 60_000;
+/**
+ * new_session / switch_session / fork tear down the current session first, which
+ * may wait on in-flight refinement (bounded server-side). Use a dedicated,
+ * generous timeout instead of the generic 30s default so a slow-but-healthy
+ * replacement never surfaces as a false client-side failure.
+ */
+export const DAEMON_SESSION_REPLACEMENT_TIMEOUT_MS = 120_000;
 export const DAEMON_SNAPSHOT_TIMEOUT_MS = 30_000;
 const MAX_IGNORED_SNAPSHOT_IDS = 128;
 const UPDATE_RECONNECT_TIMEOUT_MS = 120000;
@@ -1072,11 +1079,14 @@ export class DaemonAgentConnection implements AgentConnection {
 	}
 
 	async newSession(options?: AgentConnectionNewSessionOptions): Promise<{ cancelled: boolean }> {
-		return this.requestData<{ cancelled: boolean }>({
-			type: "new_session",
-			activeSessionId: this.activeSessionId,
-			parentSession: options?.parentSession,
-		});
+		return this.requestData<{ cancelled: boolean }>(
+			{
+				type: "new_session",
+				activeSessionId: this.activeSessionId,
+				parentSession: options?.parentSession,
+			},
+			DAEMON_SESSION_REPLACEMENT_TIMEOUT_MS,
+		);
 	}
 
 	async switchSession(
@@ -1085,12 +1095,15 @@ export class DaemonAgentConnection implements AgentConnection {
 	): Promise<{ cancelled: boolean }> {
 		const sourceActiveSessionId = this.activeSessionId;
 		try {
-			return await this.requestData<{ cancelled: boolean }>({
-				type: "switch_session",
-				activeSessionId: sourceActiveSessionId,
-				sessionPath,
-				cwdOverride: options?.cwdOverride,
-			});
+			return await this.requestData<{ cancelled: boolean }>(
+				{
+					type: "switch_session",
+					activeSessionId: sourceActiveSessionId,
+					sessionPath,
+					cwdOverride: options?.cwdOverride,
+				},
+				DAEMON_SESSION_REPLACEMENT_TIMEOUT_MS,
+			);
 		} catch (error) {
 			if (!(error instanceof SessionAlreadyActiveError) || !error.activeSessionId) {
 				throw error;
@@ -1187,12 +1200,15 @@ export class DaemonAgentConnection implements AgentConnection {
 		entryId: string,
 		options?: AgentConnectionForkOptions,
 	): Promise<{ cancelled: boolean; selectedText?: string }> {
-		return this.requestData<{ cancelled: boolean; selectedText?: string }>({
-			type: "fork",
-			activeSessionId: this.activeSessionId,
-			entryId,
-			position: options?.position,
-		});
+		return this.requestData<{ cancelled: boolean; selectedText?: string }>(
+			{
+				type: "fork",
+				activeSessionId: this.activeSessionId,
+				entryId,
+				position: options?.position,
+			},
+			DAEMON_SESSION_REPLACEMENT_TIMEOUT_MS,
+		);
 	}
 
 	async navigateTree(

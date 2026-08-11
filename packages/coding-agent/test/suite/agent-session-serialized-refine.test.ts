@@ -68,7 +68,11 @@ type SerializedInternals = {
 		firstKeptEntryId: string;
 		tokensBefore: number;
 	}>;
-	_drainPendingRefinementForDisposal(): Promise<void>;
+	_drainPendingRefinementForDisposal(options?: {
+		refineDrainBudgetMs?: number;
+		runDueRefineOnDispose?: boolean;
+	}): Promise<void>;
+	_emitRefineFailed(error: unknown): void;
 	_autoRefineOperations: Set<Promise<void>>;
 };
 
@@ -233,6 +237,56 @@ describe("Serialized auto-refine checkpoint", () => {
 		// The drain path ran the serialized checkpoint which called _applyRefine.
 		expect(applyRefine).toHaveBeenCalled();
 		expect(internals._disposed).toBe(true);
+	});
+
+	it("skips a due auto-refine when disposal is user-initiated", async () => {
+		const reviewer = vi.fn(async () => ({
+			shouldRefine: true,
+			rationale: "test",
+			instructions: "test",
+		}));
+		const harness = await createHarness({
+			persistSession: true,
+			serializedRefine: true,
+			settings: { autoRefine: { enabled: true, turnInterval: 1, cooldownMs: 0 } },
+			autoRefineReviewer: reviewer,
+		});
+		harnesses.push(harness);
+		const { applyRefine } = mockSerializedRefine(harness);
+
+		const internals = harness.session as unknown as SerializedInternals;
+		internals._assistantTurnsSinceAutoRefine = 1;
+
+		await harness.session.disposeAsync({ runDueRefineOnDispose: false });
+
+		// Leaving the session must not trigger a fresh refinement model call.
+		expect(applyRefine).not.toHaveBeenCalled();
+		expect(reviewer).not.toHaveBeenCalled();
+		expect(internals._disposed).toBe(true);
+	});
+
+	it("bounds the in-flight refinement wait by the disposal drain budget", async () => {
+		const harness = await createHarness({
+			persistSession: true,
+			serializedRefine: true,
+			settings: { autoRefine: { enabled: false } },
+		});
+		harnesses.push(harness);
+
+		const internals = harness.session as unknown as SerializedInternals;
+		const failSpy = vi.spyOn(internals, "_emitRefineFailed");
+		// A refinement that never settles must not stall disposal.
+		internals._refineInFlight = new Promise<void>(() => {});
+
+		const start = Date.now();
+		await harness.session.disposeAsync({ refineDrainBudgetMs: 50 });
+		const elapsed = Date.now() - start;
+
+		expect(elapsed).toBeLessThan(5000);
+		expect(internals._disposed).toBe(true);
+		expect(failSpy).toHaveBeenCalledOnce();
+		expect(failSpy.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+		expect((failSpy.mock.calls[0]?.[0] as Error).message).toContain("50ms");
 	});
 
 	it("interactive background refine behavior preserved when serializedRefine is false", async () => {

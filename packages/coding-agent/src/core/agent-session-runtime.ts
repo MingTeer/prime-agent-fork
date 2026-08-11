@@ -224,7 +224,10 @@ export class AgentSessionRuntime implements SubagentRuntimeHost {
 		await flushAgentTraceUpload(this.session.sessionManager).catch(() => undefined);
 		this.beforeSessionInvalidate?.();
 		// Await the kernel's final snapshot flush before invalidating the session.
-		await this.session.disposeAsync();
+		// Session replacement is user-initiated: never start a fresh due auto-refine
+		// here, and bound any in-flight refinement wait so /new, /resume and fork
+		// stay well within the client-side command timeout.
+		await this.session.disposeAsync({ runDueRefineOnDispose: false });
 		await this.disposeHostedSubagentRuntimes();
 	}
 
