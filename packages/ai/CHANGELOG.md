@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Updated `@mistralai/mistralai` to ^2.5.0 and added its optional peer `@opentelemetry/api` so bundling the SDK's observability module resolves.
+
 ## [0.7.1] - 2026-08-07
 
 ## [0.7.0] - 2026-08-05
