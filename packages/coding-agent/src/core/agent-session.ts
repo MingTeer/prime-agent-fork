@@ -963,6 +963,28 @@ const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "hi
 
 /** Cap on the post-compaction kernel namespace probe so a wedged kernel can't stall recovery. */
 const KERNEL_STATE_LISTING_TIMEOUT_MS = 5000;
+
+/**
+ * Default upper bound for awaiting in-flight refinement during async disposal.
+ * Refinement is a best-effort persistence step; abandoning it past this budget
+ * is preferable to stalling session replacement (e.g. /new) past client timeouts.
+ */
+const DEFAULT_REFINE_DISPOSE_DRAIN_BUDGET_MS = 15_000;
+
+export interface AgentSessionDisposeOptions {
+	/**
+	 * Max milliseconds to wait for in-flight refinement before abandoning it
+	 * and continuing teardown. Defaults to DEFAULT_REFINE_DISPOSE_DRAIN_BUDGET_MS.
+	 */
+	refineDrainBudgetMs?: number;
+	/**
+	 * Whether a due-but-not-yet-started auto-refine (turn interval reached, or a
+	 * compaction review still pending) is run before disposal. Pass false for
+	 * user-initiated session replacement (/new, /resume, fork) so leaving the
+	 * session never triggers a fresh model call. Defaults to true.
+	 */
+	runDueRefineOnDispose?: boolean;
+}
 const RLM_MAX_DEPTH_STATE_CUSTOM_TYPE = "rlm_max_depth_state";
 
 function noopRlmChildAbort(): void {}
@@ -3768,7 +3790,7 @@ export class AgentSession {
 	 * (which flushes a final namespace snapshot) before the synchronous dispose, so
 	 * the latest state reaches disk instead of racing process exit.
 	 */
-	async disposeAsync(): Promise<void> {
+	async disposeAsync(options: AgentSessionDisposeOptions = {}): Promise<void> {
 		if (this._disposed) {
 			return this._disposeCallbacksPromise;
 		}
@@ -3780,7 +3802,7 @@ export class AgentSession {
 		this._disposeAsyncPromise = (async () => {
 			// Drain before marking _disposing so a refine triggered at the final
 			// agent_end completes instead of being aborted by dispose().
-			await this._drainPendingRefinementForDisposal();
+			await this._drainPendingRefinementForDisposal(options);
 			if (this._disposed) {
 				return this._disposeCallbacksPromise;
 			}
@@ -3797,12 +3819,53 @@ export class AgentSession {
 	 * from disposeAsync before _disposing is set so refinement completes
 	 * before disposal.
 	 */
-	private async _drainPendingRefinementForDisposal(): Promise<void> {
+	private async _drainPendingRefinementForDisposal(options: AgentSessionDisposeOptions = {}): Promise<void> {
+		const budgetMs = options.refineDrainBudgetMs ?? DEFAULT_REFINE_DISPOSE_DRAIN_BUDGET_MS;
+		const deadline = Date.now() + budgetMs;
+		// Runs `operation` bounded by the remaining drain budget. Resolves false when
+		// the budget is exhausted first; the refinement keeps running in the
+		// background and is aborted by the teardown that follows. A stalled drain
+		// must not hold session replacement (e.g. /new) past client timeouts.
+		const runWithinBudget = async (operation: () => Promise<unknown>): Promise<boolean> => {
+			const remainingMs = deadline - Date.now();
+			if (remainingMs <= 0) {
+				return false;
+			}
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			try {
+				return await Promise.race([
+					Promise.resolve()
+						.then(operation)
+						.then(
+							() => true,
+							() => true,
+						),
+					new Promise<false>((resolve) => {
+						timer = setTimeout(() => resolve(false), remainingMs);
+						timer.unref?.();
+					}),
+				]);
+			} finally {
+				if (timer) {
+					clearTimeout(timer);
+				}
+			}
+		};
+		const abandonDrain = (): void => {
+			this._emitRefineFailed(
+				new Error(
+					`Abandoned pending refinement after waiting ${budgetMs}ms during session disposal; teardown continues without it.`,
+				),
+			);
+		};
 		for (const timer of this._scheduledAutoRefineTimers) {
 			clearTimeout(timer);
 		}
 		this._scheduledAutoRefineTimers.clear();
-		await Promise.allSettled([...this._autoRefineOperations]);
+		if (!(await runWithinBudget(() => Promise.allSettled([...this._autoRefineOperations])))) {
+			abandonDrain();
+			return;
+		}
 		for (const timer of this._scheduledAutoRefineTimers) {
 			clearTimeout(timer);
 		}
@@ -3810,14 +3873,22 @@ export class AgentSession {
 		// Wait for in-flight refinement (including serialized background plan) to settle.
 		while (this._refineInFlight || this._refinePlanInFlight || this._serializedPlanInFlight) {
 			if (this._refineInFlight) {
-				await this._refineInFlight;
+				const inFlight = this._refineInFlight;
+				if (!(await runWithinBudget(() => inFlight))) {
+					abandonDrain();
+					return;
+				}
 			} else if (this._refinePlanInFlight) {
-				await this._refinePlanInFlight;
+				const planInFlight = this._refinePlanInFlight;
+				if (!(await runWithinBudget(() => planInFlight))) {
+					abandonDrain();
+					return;
+				}
 			} else if (this._serializedPlanInFlight) {
 				// Fix 5: Await the background plan and apply a ready "plan"
 				// result before teardown so the refinement is persisted.
 				// Do NOT discard a ready plan.
-				await this._consumeSerializedBackgroundPlan(async (bgResult) => {
+				const consumeSerializedPlan = this._consumeSerializedBackgroundPlan(async (bgResult) => {
 					if (bgResult?.status === "plan" && bgResult.branchVersion === this._autoRefineBranchVersion) {
 						try {
 							await this._applySerializedPlan(bgResult);
@@ -3853,6 +3924,10 @@ export class AgentSession {
 					}
 					return false;
 				});
+				if (!(await runWithinBudget(() => consumeSerializedPlan))) {
+					abandonDrain();
+					return;
+				}
 			} else {
 				await new Promise<void>((resolve) => setTimeout(resolve, 0));
 			}
@@ -3864,7 +3939,10 @@ export class AgentSession {
 			const pending = this._pendingRequestedRefine;
 			this._pendingRequestedRefine = undefined;
 			try {
-				await this._runSerializedRefine(pending);
+				if (!(await runWithinBudget(() => this._runSerializedRefine(pending)))) {
+					abandonDrain();
+					return;
+				}
 			} catch {
 				// Best-effort drain; refinement errors must not block disposal.
 			}
@@ -3875,7 +3953,12 @@ export class AgentSession {
 		}
 		// A serialized compaction can finish without another model turn. Drain its
 		// pending review here so disposal does not silently lose the trigger.
-		if (this._serializedRefine && this._compactAutoRefinePending && this._autoRefineAllowedForSession()) {
+		if (
+			options.runDueRefineOnDispose !== false &&
+			this._serializedRefine &&
+			this._compactAutoRefinePending &&
+			this._autoRefineAllowedForSession()
+		) {
 			const compactSettings = this.settingsManager.getAutoRefineSettings();
 			if (!compactSettings.enabled || !compactSettings.compact) {
 				this._compactAutoRefinePending = false;
@@ -3886,7 +3969,13 @@ export class AgentSession {
 				this._compactAutoRefinePending = false;
 				if (!underCooldown) {
 					try {
-						await this._runSerializedAutoRefineReview("compact", this._autoRefineBranchVersion);
+						if (
+							!(await runWithinBudget(() =>
+								this._runSerializedAutoRefineReview("compact", this._autoRefineBranchVersion),
+							))
+						) {
+							abandonDrain();
+						}
 					} catch {
 						// Best-effort drain; refinement errors must not block disposal.
 					}
@@ -3898,7 +3987,12 @@ export class AgentSession {
 		// If auto-refine is due but has not started yet, run it now so the
 		// refinement is persisted before disposal. Use the direct serialized
 		// path in serialized mode, or _maybeAutoRefine in interactive mode
-		// (where the agent is idle at this point).
+		// (where the agent is idle at this point). Skipped entirely for
+		// user-initiated session replacement (runDueRefineOnDispose: false):
+		// leaving the session must not trigger a fresh model call.
+		if (options.runDueRefineOnDispose === false) {
+			return;
+		}
 		if (this._disposed || !this._autoRefineAllowedForSession()) {
 			return;
 		}
@@ -3916,9 +4010,13 @@ export class AgentSession {
 			return;
 		}
 		if (this._serializedRefine) {
-			await this._runSerializedRefineCheckpoint();
+			if (!(await runWithinBudget(() => this._runSerializedRefineCheckpoint()))) {
+				abandonDrain();
+			}
 		} else {
-			await this._maybeAutoRefine("turn_interval");
+			if (!(await runWithinBudget(() => this._maybeAutoRefine("turn_interval")))) {
+				abandonDrain();
+			}
 		}
 	}
 

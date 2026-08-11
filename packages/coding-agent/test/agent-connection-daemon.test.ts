@@ -5,6 +5,7 @@ import { MissingSessionCwdError } from "../src/core/session-cwd.js";
 import { SessionImportFileNotFoundError } from "../src/core/session-import-errors.js";
 import {
 	DAEMON_REFINE_REQUEST_TIMEOUT_MS,
+	DAEMON_SESSION_REPLACEMENT_TIMEOUT_MS,
 	DaemonAgentConnection,
 } from "../src/modes/agent-connection/daemon-agent-connection.js";
 import type {
@@ -47,6 +48,7 @@ class FakeDaemonClient {
 	connectionStateGate: Promise<void> | undefined;
 	connectionStateFactory: ((activeSessionId: string) => AgentConnectionState) | undefined;
 	abortBashUnknownCommand = false;
+	switchSessionSucceeds = false;
 	abortAndClearQueueUnknownCommand = false;
 	cronAddGate: Promise<void> | undefined;
 	promptGate: Promise<void> | undefined;
@@ -436,6 +438,9 @@ class FakeDaemonClient {
 					},
 				};
 			case "switch_session":
+				if (this.switchSessionSucceeds) {
+					return { type: "response", command: command.type, success: true, data: { cancelled: false } };
+				}
 				return {
 					type: "response",
 					command: command.type,
@@ -461,6 +466,9 @@ class FakeDaemonClient {
 						filePath: "/tmp/not-found.jsonl",
 					},
 				};
+			case "new_session":
+			case "fork":
+				return { type: "response", command: command.type, success: true, data: { cancelled: false } };
 			default:
 				throw new Error(`Unexpected command: ${command.type}`);
 		}
@@ -709,6 +717,23 @@ describe("DaemonAgentConnection", () => {
 			activeSessionId: "active-1",
 			telemetryDisabled: true,
 		});
+	});
+
+	it("uses a dedicated replacement timeout for new/switch/fork session commands", async () => {
+		const fakeClient = new FakeDaemonClient();
+		fakeClient.switchSessionSucceeds = true;
+		const connection = new DaemonAgentConnection(asDaemonClient(fakeClient), "active-1");
+
+		await connection.newSession();
+		await connection.fork("entry-1");
+		await connection.switchSession("/tmp/other-session.jsonl");
+
+		expect(fakeClient.requests.map((request) => request.type)).toEqual(["new_session", "fork", "switch_session"]);
+		expect(fakeClient.requestTimeouts).toEqual([
+			DAEMON_SESSION_REPLACEMENT_TIMEOUT_MS,
+			DAEMON_SESSION_REPLACEMENT_TIMEOUT_MS,
+			DAEMON_SESSION_REPLACEMENT_TIMEOUT_MS,
+		]);
 	});
 
 	it("forwards queueIfBusy for prompt admission", async () => {
