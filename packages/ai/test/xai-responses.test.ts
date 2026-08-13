@@ -102,14 +102,22 @@ describe("xAI OAuth model routing", () => {
 
 	it("routes grok-4.5 and grok-4.6 to openai-responses and drops other xai models", () => {
 		const xaiModels = getModels("xai") as Model<Api>[];
-		const grok46CompletionsModel: Model<Api> = {
-			...xaiModels.find((m) => m.id === "grok-4.5")!,
-			id: "grok-4.6",
-			name: "Grok 4.6",
-		};
+		// The catalog may not list grok-4.6 yet; synthesize it from grok-4.5 when missing.
+		const grok46CompletionsModel: Model<Api> | undefined = xaiModels.some((m) => m.id === "grok-4.6")
+			? undefined
+			: {
+					...xaiModels.find((m) => m.id === "grok-4.5")!,
+					id: "grok-4.6",
+					name: "Grok 4.6",
+				};
 		const openaiModel = getModels("openai")[0] as Model<Api>;
 		const anthropicModel = getModels("anthropic")[0] as Model<Api>;
-		const input = [...xaiModels, grok46CompletionsModel, openaiModel, anthropicModel];
+		const input = [
+			...xaiModels,
+			...(grok46CompletionsModel ? [grok46CompletionsModel] : []),
+			openaiModel,
+			anthropicModel,
+		];
 
 		const result = xaiOAuthProvider.modifyModels!(input, {
 			access: "access-token",
@@ -128,7 +136,7 @@ describe("xAI OAuth model routing", () => {
 		expect(grok46!.compat).toEqual({ supportsLongCacheRetention: false });
 
 		for (const m of xaiModels) {
-			if (m.id === "grok-4.5") continue;
+			if (XAI_SUBSCRIPTION_MODEL_IDS.includes(m.id)) continue;
 			expect(result.some((r) => r.id === m.id)).toBe(false);
 		}
 
