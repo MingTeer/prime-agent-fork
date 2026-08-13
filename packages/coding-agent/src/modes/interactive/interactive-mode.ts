@@ -19,6 +19,7 @@ import {
 	type ToolCall,
 } from "@earendil-works/pi-ai";
 import { BUILTIN_MCP_CATALOG } from "@earendil-works/pi-ai/mcp";
+import { getOAuthProvider } from "@earendil-works/pi-ai/oauth";
 import type {
 	AutocompleteItem,
 	AutocompleteProvider,
@@ -2586,6 +2587,8 @@ export class InteractiveMode {
 		// accumulating. The baseline is managed at turn end (refreshConnectionContextUsage) and
 		// reset on a new user message.
 		this.footer.setAutoCompactEnabled(state.autoCompactionEnabled);
+		this.footer.setSubscriptionLabel(this.getSubscriptionFooterLabel());
+		this.footer.invalidate();
 		this.sessionRecap = state.recap;
 		this.renderRecap();
 		this.updateWorkingPulse();
@@ -2700,12 +2703,29 @@ export class InteractiveMode {
 		if (!marked) {
 			this.modelRegistry.markProviderAuthStale(event.provider);
 		}
+		this.footer.setSubscriptionLabel(this.getSubscriptionFooterLabel());
 		this.footer.invalidate();
 		this.updateEditorBorderColor();
 	}
 
 	private getCurrentModel(): AgentConnectionModel | undefined {
 		return this.connectionState?.model;
+	}
+
+	/**
+	 * Footer label shown while the current model runs on subscription OAuth credentials.
+	 * `undefined` keeps the footer empty.
+	 */
+	private getSubscriptionFooterLabel(): string | undefined {
+		const model = this.getCurrentModel();
+		if (!model || !this.modelRegistry.isUsingOAuth(model)) {
+			return undefined;
+		}
+		const oauthProvider = getOAuthProvider(model.provider);
+		if (oauthProvider?.isSubscription !== true) {
+			return undefined;
+		}
+		return `${this.modelRegistry.getProviderDisplayName(model.provider)} subscription`;
 	}
 
 	private getCurrentModelId(): string | undefined {
@@ -7455,6 +7475,7 @@ export class InteractiveMode {
 			serviceTier: state.serviceTier,
 			availableThinkingLevels: state.availableThinkingLevels,
 		});
+		this.footer.setSubscriptionLabel(this.getSubscriptionFooterLabel());
 		this.footer.invalidate();
 		this.subagentSummaryLine.invalidate();
 		this.updateEditorBorderColor();
@@ -8287,6 +8308,7 @@ export class InteractiveMode {
 			onAuthChanged: async () => {
 				await this.refreshConnectionModelsAfterAuthChange();
 				await this.updateAvailableProviderCount();
+				this.footer.setSubscriptionLabel(this.getSubscriptionFooterLabel());
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
 			},

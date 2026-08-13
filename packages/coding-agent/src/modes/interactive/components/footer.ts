@@ -1,5 +1,6 @@
-import type { Component } from "@earendil-works/pi-tui";
+import { type Component, truncateToWidth } from "@earendil-works/pi-tui";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.js";
+import { theme } from "../theme/theme.js";
 
 /**
  * Footer component for the prime brand TUI.
@@ -7,11 +8,22 @@ import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provi
  * Renders nothing by default — token counters, cost, model name, cwd, and context %
  * are intentionally hidden. The setters and invalidate/dispose hooks are kept so the
  * existing call sites in interactive-mode keep working without modification, and so
- * `/usage` can expose telemetry without re-plumbing.
+ * `/usage` can expose telemetry without re-plumbing. The only visible content is the
+ * subscription label shown while the current model runs on subscription OAuth
+ * credentials.
  */
 export class FooterComponent implements Component {
+	private subscriptionLabel: string | undefined;
+
 	constructor(private footerData: ReadonlyFooterDataProvider) {
 		void this.footerData;
+	}
+
+	/**
+	 * Set the subscription label rendered in the footer. `undefined` hides it.
+	 */
+	setSubscriptionLabel(label: string | undefined): void {
+		this.subscriptionLabel = label;
 	}
 
 	setAutoCompactEnabled(_enabled: boolean): void {
@@ -34,9 +46,14 @@ export class FooterComponent implements Component {
 		// Git watcher cleanup handled by provider
 	}
 
-	render(_width: number): string[] {
+	render(width: number): string[] {
 		// Footer is intentionally empty in the prime brand TUI. Telemetry (cost, tokens, model,
-		// cwd, context %) is hidden by default; bring it back via /usage when needed.
-		return [];
+		// cwd, context %) is hidden by default; bring it back via /usage when needed. The only
+		// exception is the subscription label, rendered as a single muted line.
+		if (this.subscriptionLabel === undefined) {
+			return [];
+		}
+		const label = truncateToWidth(this.subscriptionLabel, Math.max(1, width), "");
+		return [theme.fg("muted", label)];
 	}
 }

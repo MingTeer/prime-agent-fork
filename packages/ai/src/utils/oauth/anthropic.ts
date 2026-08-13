@@ -381,6 +381,7 @@ export async function refreshAnthropicToken(refreshToken: string): Promise<OAuth
 export const anthropicOAuthProvider: OAuthProviderInterface = {
 	id: "anthropic",
 	name: "Anthropic (Claude Pro/Max)",
+	isSubscription: true,
 	usesCallbackServer: true,
 
 	async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
