@@ -53,6 +53,9 @@ export interface OAuthProviderInterface {
 	/** Whether login uses a local callback server and supports manual code input. */
 	usesCallbackServer?: boolean;
 
+	/** Whether the provider is a known subscription (e.g. shown in the auth footer). */
+	isSubscription?: boolean;
+
 	/** Refresh expired credentials, return updated credentials to persist */
 	refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials>;
 
