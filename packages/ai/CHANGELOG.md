@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Added xAI subscription login (SuperGrok / X Premium) via device-code OAuth, with automatic token refresh and https-validated verification links.
+- Changed subscription-backed grok-4.5 and grok-4.6 to route through the OpenAI Responses API with low/medium/high reasoning effort; API key credentials keep using OpenAI Completions unchanged.
+- Removed obsolete xAI models (grok-4.20 variants, grok-code-fast-1) from the built-in catalog; grok-4.6 is now included.
+
 ## [0.7.1] - 2026-08-07
 
 ## [0.7.0] - 2026-08-05

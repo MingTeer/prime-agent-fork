@@ -1105,10 +1105,20 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 		}
 
 		// Process xAi models
+		// Follows the upstream catalog pruning strategy: grok-4.20 variants and
+		// grok-code-fast-1 are dropped; models missing from models.dev are not
+		// hand-added. grok-4.6 and newer are picked up automatically once
+		// models.dev lists them.
+		const XAI_EXCLUDED_MODELS = new Set([
+			"grok-4.20-0309-non-reasoning",
+			"grok-4.20-0309-reasoning",
+			"grok-code-fast-1",
+		]);
 		if (data.xai?.models) {
 			for (const [modelId, model] of Object.entries(data.xai.models)) {
 				const m = model as ModelsDevModel;
 				if (m.tool_call !== true) continue;
+				if (XAI_EXCLUDED_MODELS.has(modelId)) continue;
 
 				models.push({
 					id: modelId,
@@ -2081,27 +2091,6 @@ async function generateModels() {
 		},
 	];
 	allModels.push(...codexModels);
-
-	// Add missing Grok models
-	if (!allModels.some(m => m.provider === "xai" && m.id === "grok-code-fast-1")) {
-		allModels.push({
-			id: "grok-code-fast-1",
-			name: "Grok Code Fast 1",
-			api: "openai-completions",
-			baseUrl: "https://api.x.ai/v1",
-			provider: "xai",
-			reasoning: false,
-			input: ["text"],
-			cost: {
-				input: 0.2,
-				output: 1.5,
-				cacheRead: 0.02,
-				cacheWrite: 0,
-			},
-			contextWindow: 32768,
-			maxTokens: 8192,
-		});
-	}
 
 	// Add missing Mistral Medium 3.5 model until models.dev includes it
 	if (!allModels.some(m => m.provider === "mistral" && m.id === "mistral-medium-3.5")) {
